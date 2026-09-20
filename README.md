@@ -1,65 +1,55 @@
-# BookShelf — AWS EKS CI/CD
+# BookShelf — AWS EKS 배포
 
-도서 관리 서비스를 컨테이너로 배포하고, 개발·운영 환경과 자동 확장을 구성한 프로젝트입니다.
-**이도훈의 담당 영역: Docker · ECR · EKS 배포 · 환경 분리 · HPA**
+앞선 프로젝트에서 만든 도서 관리 서비스를 AWS에 배포했습니다.
+팀에서 프런트엔드·백엔드의 Docker 이미지, EKS 배포 설정, 개발·운영 환경 분리를 맡았습니다.
 
-| 기간 | 구분 | 역할 |
-|---|---|---|
-| 2026.06 | KT AIVLE 미니프로젝트 6차 · 팀 프로젝트 | 컨테이너·AWS 배포 담당 |
+2026.06 · KT AIVLE 미니프로젝트 6차 · 팀 프로젝트
 
-## 내가 맡은 일
+## 배포 구성
 
-| 핵심 기여 | 구현 내용 | 근거 |
-|---|---|---|
-| 컨테이너화·빌드 | FE/BE Dockerfile, ECR 업로드, CodeBuild 단계 구성 | [Dockerfile](backend/Dockerfile) · [빌드 설정](buildspec.yml) |
-| 배포 환경 분리 | EKS Deployment·Service, dev/prod namespace, 환경별 배포 단계 | [PR #2](https://github.com/aivle-b-t24/6-mini-project24/pull/2) · [배포 설정](k8s) |
-| 경로·자원 조정 | Nginx API 경로 수정, requests/limits와 CPU 기반 HPA | [Nginx](frontend/nginx.conf) · [HPA](k8s/prod/backend-hpa.yaml) |
+프런트엔드는 Nginx, 백엔드는 Spring Boot 이미지로 만들고 ECR에 올렸습니다.
+CodeBuild의 이미지 빌드와 배포 단계를 나누고, EKS의 `dev`와 `prod` namespace에 각각 배포하도록 구성했습니다.
 
-웹 기능과 DB 연동은 팀 공동 결과이며, 위 표는 개인 담당 범위입니다.
+- [Dockerfile](backend/Dockerfile) · [이미지 빌드](buildspec.yml)
+- [개발 배포](buildspec-deploy-dev.yml) · [운영 배포](buildspec-deploy-prod.yml) · [환경 분리 PR](https://github.com/aivle-b-t24/6-mini-project24/pull/2)
 
-## 결과와 문제 해결
-
-- 개발·운영 namespace별 서비스와 컨테이너 기동을 확인했습니다.
-- 부하 테스트에서 백엔드 Pod **2→3 확장**, Deployment **3/3 Ready**를 확인했습니다.
-
-**DB 연결 한도를 고려한 확장 상한 조정**
-
-Pod를 늘릴 때 DB 연결 수도 함께 증가하므로, DB 연결 한도를 고려해 백엔드 HPA 최대 복제 수를 **5→3**으로 낮췄습니다.
-최소 2개·최대 3개·CPU 목표 50%로 설정하고, 부하에 따라 Pod가 늘어나는지 확인했습니다.
-
-[설정 변경 커밋](https://github.com/aivle-b-t24/6-mini-project24/commit/c0413d5)
-
-## 구조와 실행 화면
+사용자 요청은 LoadBalancer를 거쳐 프런트엔드 Nginx로 들어옵니다.
+화면은 Nginx에서 제공하고, `/api` 요청은 클러스터 내부의 백엔드 Service로 전달합니다.
 
 ```mermaid
 flowchart LR
-    Git[GitHub] --> Build[CodePipeline / CodeBuild]
-    Build --> ECR[Amazon ECR]
-    ECR --> Dev[EKS: dev]
-    ECR --> Prod[EKS: prod]
-    User[사용자] --> LB[LoadBalancer / Nginx]
-    LB --> API[Backend Pod]
-    API --> DB[RDS MySQL]
-    HPA[CPU 기반 HPA] -. 복제 수 조정 .-> API
+    User[브라우저] --> LB[frontend LoadBalancer]
+    subgraph Namespace[dev 또는 prod namespace]
+        LB --> Nginx[frontend Pod: Nginx]
+        Nginx -->|/api 요청| Service[backend ClusterIP Service]
+        Service --> Backend[backend Pod: Spring Boot]
+        HPA[HPA: CPU 목표 50%] -. 2~3개 .-> Backend
+    end
+    Backend --> DB[RDS MySQL]
 ```
 
-팀 서비스의 전체 흐름입니다. 개인 기여는 위 표에서 구분했습니다.
+## 배포하면서 수정한 부분
 
-**개발 파이프라인 실행 기록**
+**화면 경로와 API 경로 분리**
 
-![CodePipeline 개발 환경 배포 성공](docs/images/dev-pipeline-success.png)
+프런트엔드 화면 경로와 API 요청 경로가 충돌해, API 요청에 `/api` 접두어를 붙였습니다.
+프런트엔드의 API 기본 주소와 Nginx 프록시 설정을 함께 바꿨습니다.
 
-**부하에 따른 Pod 확장 기록**
+[Nginx 설정](frontend/nginx.conf) · [수정 커밋](https://github.com/aivle-b-t24/6-mini-project24/commit/e1d0bb486b0758bd81e33d464d8143e607493b82)
 
-![HPA 부하 테스트 중 Pod 2개에서 3개로 확장](docs/images/hpa-scale-out.png)
+**DB 연결 한도를 고려한 HPA 설정**
 
-기존 dev/prod 데모 주소는 **현재 접속 불가**입니다(2026.09.20 DNS 확인).
-위 이미지는 프로젝트 수행 당시의 실행 기록입니다.
+백엔드 Pod가 늘어나면 DB 연결 수도 함께 늘어나므로, DB 연결 한도를 고려해 최대 복제 수를 5개에서 3개로 낮췄습니다.
+CPU 목표를 50%로 두고 부하를 줬을 때 Pod가 2개에서 3개로 늘어나고, 3개 모두 Ready 상태가 되는 것을 확인했습니다.
 
-## 더 보기
+[HPA 설정](k8s/dev/backend-hpa.yaml) · [상한 조정 커밋](https://github.com/aivle-b-t24/6-mini-project24/commit/c0413d5a7ee78d193ebc71d78489c33fac2fa73c)
 
-- [실행 방법·CI/CD·모니터링 상세](docs/technical-details.md)
-- [개발 환경 manifest](k8s/dev) · [운영 환경 manifest](k8s/prod)
-- [팀 저장소](https://github.com/aivle-b-t24/6-mini-project24)
+![부하 테스트 중 백엔드 Pod 2→3 확장](docs/images/hpa-scale-out.png)
 
-이 저장소는 팀 프로젝트의 개인 포트폴리오용 포크입니다. 원본과 팀원의 커밋 이력을 보존합니다.
+## 실행과 상세 구성
+
+- [로컬 실행·CI/CD·모니터링](docs/technical-details.md)
+- [개발 환경 설정](k8s/dev) · [운영 환경 설정](k8s/prod)
+- [원본 팀 저장소](https://github.com/aivle-b-t24/6-mini-project24)
+
+현재 데모 주소는 접속되지 않습니다(2026.09.20 확인). 위 캡처는 프로젝트 당시 부하 테스트 화면입니다.
