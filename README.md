@@ -28,6 +28,12 @@ flowchart LR
     Backend --> DB[RDS MySQL]
 ```
 
+## 배포 확인
+
+![운영 파이프라인의 Source·Build·Approval·Deploy 성공 화면](docs/images/prod-pipeline-success.png)
+
+프로젝트 당시 운영 파이프라인 실행 화면입니다. 이미지 빌드와 배포 단계를 나누고 개발·운영 환경에 각각 배포하도록 구성했습니다.
+
 ## 배포하면서 수정한 부분
 
 **화면 경로와 API 경로 분리**
